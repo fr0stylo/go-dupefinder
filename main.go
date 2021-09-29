@@ -13,6 +13,7 @@ import (
 
 var db map[string][]string
 var wg sync.WaitGroup
+var mux sync.Mutex
 
 func walkFunc(pathChan chan string) func(path string, info fs.FileInfo, err error) error {
 	return func(path string, info fs.FileInfo, err error) error {
@@ -25,7 +26,7 @@ func walkFunc(pathChan chan string) func(path string, info fs.FileInfo, err erro
 	}
 }
 
-func walkThroughFiles(rootDir string) chan string {
+func walkThroughFilesRoutine(rootDir string) chan string {
 	pathC := make(chan string, 100)
 
 	wg.Add(1)
@@ -39,10 +40,10 @@ func walkThroughFiles(rootDir string) chan string {
 
 type FileDef struct {
 	Path string
-	Hash []byte
+	Hash string
 }
 
-func walkFiles(pathC chan string, storeC chan *FileDef) {
+func hashFilesRoutine(pathC chan string, storeC chan *FileDef) {
 	run := true
 	for run {
 		fp, ok := <-pathC
@@ -57,15 +58,30 @@ func walkFiles(pathC chan string, storeC chan *FileDef) {
 		}
 
 		hash := fmt.Sprintf("%x", h)
-
-		if _, ok := db[hash]; !ok {
-			db[hash] = make([]string, 0)
-		}
-		val := db[hash]
-		val = append(val, fp)
-		db[hash] = val
-		wg.Done()
+		storeC <- &FileDef{Hash: hash, Path: fp}
 	}
+}
+
+func storeToDbRoutine() chan *FileDef {
+	storeC := make(chan *FileDef)
+
+	go func() {
+		for {
+			fd := <-storeC
+			mux.Lock()
+			if _, ok := db[fd.Hash]; !ok {
+				db[fd.Hash] = make([]string, 0)
+			}
+			val := db[fd.Hash]
+			val = append(val, fd.Path)
+			db[fd.Hash] = val
+			mux.Unlock()
+
+			wg.Done()
+		}
+	}()
+
+	return storeC
 }
 
 func init() {
@@ -79,9 +95,10 @@ func main() {
 	}
 
 	log.Printf("Wroking on file path %s", os.Args[1])
-	pathC := walkThroughFiles(os.Args[1])
+	pathC := walkThroughFilesRoutine(os.Args[1])
+	storeC := storeToDbRoutine()
 	for i := 0; i < 10; i++ {
-		go walkFiles(pathC, nil)
+		go hashFilesRoutine(pathC, storeC)
 	}
 	wg.Wait()
 
@@ -89,7 +106,7 @@ func main() {
 		if len(v) > 1 {
 			log.Printf("%s ->\n", k)
 			for _, fp := range v {
-				log.Printf("  |- %s n", fp)
+				log.Printf("  |- %s", fp)
 			}
 
 		}
