@@ -12,14 +12,17 @@ import (
 	"github.com/fr0stylo/go-dupefinder/filehash"
 )
 
-var db map[string][]string
+var db map[string][]*FileDef
 var wg sync.WaitGroup
 var mux sync.Mutex
 
-func walkFunc(pathChan chan string) func(path string, info fs.FileInfo, err error) error {
+func walkFunc(pathChan chan *FileDef) func(path string, info fs.FileInfo, err error) error {
 	return func(path string, info fs.FileInfo, err error) error {
 		if !info.IsDir() {
-			pathChan <- path
+			pathChan <- &FileDef{
+				Path: path,
+				Size: info.Size(),
+			}
 			wg.Add(1)
 		}
 
@@ -27,8 +30,8 @@ func walkFunc(pathChan chan string) func(path string, info fs.FileInfo, err erro
 	}
 }
 
-func walkThroughFilesRoutine(rootDir string) chan string {
-	pathC := make(chan string, 100)
+func walkThroughFilesRoutine(rootDir string) chan *FileDef {
+	pathC := make(chan *FileDef, 100)
 
 	wg.Add(1)
 	go func() {
@@ -42,16 +45,17 @@ func walkThroughFilesRoutine(rootDir string) chan string {
 type FileDef struct {
 	Path string
 	Hash string
+	Size int64
 }
 
-func hashFilesRoutine(pathC chan string, storeC chan *FileDef) {
+func hashFilesRoutine(pathC chan *FileDef, storeC chan *FileDef) {
 	run := true
 	for run {
 		fp, ok := <-pathC
 		run = ok
 
 		fh := filehash.New(nil)
-		h, err := fh.Hash(fp)
+		h, err := fh.Hash(fp.Path)
 		if err != nil {
 			log.Print(err)
 			wg.Done()
@@ -59,7 +63,8 @@ func hashFilesRoutine(pathC chan string, storeC chan *FileDef) {
 		}
 
 		hash := fmt.Sprintf("%x", h)
-		storeC <- &FileDef{Hash: hash, Path: fp}
+		fp.Hash = hash
+		storeC <- fp
 	}
 }
 
@@ -71,10 +76,10 @@ func storeToDbRoutine() chan *FileDef {
 			fd := <-storeC
 			mux.Lock()
 			if _, ok := db[fd.Hash]; !ok {
-				db[fd.Hash] = make([]string, 0)
+				db[fd.Hash] = make([]*FileDef, 0)
 			}
 			val := db[fd.Hash]
-			val = append(val, fd.Path)
+			val = append(val, fd)
 			db[fd.Hash] = val
 			mux.Unlock()
 
@@ -86,20 +91,23 @@ func storeToDbRoutine() chan *FileDef {
 }
 
 func init() {
-	db = make(map[string][]string)
+	db = make(map[string][]*FileDef)
 }
 
 func main() {
 	parralel := flag.Int("p", 10, "sets paralelization level for hashing")
+	sizeThreshold := flag.Int("st", 0, "sets size threshold in kb")
+	help := flag.Bool("h", false, "help command")
 	flag.Parse()
+	rootPath := flag.Arg(0)
 
-	log.Print(os.Args)
-	if len(os.Args) < 2 {
-		log.Fatal("Not enough arguments")
+	if *help {
+		flag.PrintDefaults()
+		os.Exit(0)
 	}
 
-	log.Printf("Wroking on file path %s", os.Args[1])
-	pathC := walkThroughFilesRoutine(os.Args[1])
+	log.Printf("Wroking on file path %s", rootPath)
+	pathC := walkThroughFilesRoutine(rootPath)
 	storeC := storeToDbRoutine()
 
 	for i := 0; i < *parralel; i++ {
@@ -109,11 +117,18 @@ func main() {
 
 	for k, v := range db {
 		if len(v) > 1 {
-			log.Printf("%s ->\n", k)
-			for _, fp := range v {
-				log.Printf("  |- %s", fp)
-			}
+			size := float64(v[0].Size) / 1024
+			if size > float64(*sizeThreshold) {
+				log.Printf("%s ->\n", k)
+				log.Printf("Single file size %f kb \n", size)
+				log.Printf("All duplicates takes %f kb \n", float64(v[0].Size*int64(len(v)))/1024)
 
+				for _, fp := range v {
+					log.Printf("  |- %s", fp.Path)
+				}
+
+				log.Print()
+			}
 		}
 	}
 
