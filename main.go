@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/fr0stylo/go-dupfinder/filehash"
+	"github.com/fr0stylo/go-dupefinder/filehash"
 )
 
 var db map[string][]string
@@ -55,6 +55,7 @@ func walkFiles(pathC chan string, storeC chan *FileDef) {
 			wg.Done()
 			continue
 		}
+
 		hash := fmt.Sprintf("%x", h)
 
 		if _, ok := db[hash]; !ok {
