@@ -91,6 +91,8 @@ func init() {
 
 func main() {
 	parralel := flag.Int("p", 10, "sets paralelization level for hashing")
+	flag.Parse()
+
 	log.Print(os.Args)
 	if len(os.Args) < 2 {
 		log.Fatal("Not enough arguments")
