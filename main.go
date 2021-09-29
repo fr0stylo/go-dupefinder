@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -89,6 +90,7 @@ func init() {
 }
 
 func main() {
+	parralel := flag.Int("p", 10, "sets paralelization level for hashing")
 	log.Print(os.Args)
 	if len(os.Args) < 2 {
 		log.Fatal("Not enough arguments")
@@ -97,7 +99,8 @@ func main() {
 	log.Printf("Wroking on file path %s", os.Args[1])
 	pathC := walkThroughFilesRoutine(os.Args[1])
 	storeC := storeToDbRoutine()
-	for i := 0; i < 10; i++ {
+
+	for i := 0; i < *parralel; i++ {
 		go hashFilesRoutine(pathC, storeC)
 	}
 	wg.Wait()
