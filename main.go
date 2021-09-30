@@ -12,11 +12,13 @@ import (
 	"github.com/fr0stylo/go-dupefinder/filehash"
 )
 
+const VERSION = "1.0.0"
+
 var db map[string][]*FileDef
 var wg sync.WaitGroup
 var mux sync.Mutex
 
-func walkFunc(pathChan chan *FileDef) func(path string, info fs.FileInfo, err error) error {
+func walkFunc(pathChan chan *FileDef, exclude *exclusions) func(path string, info fs.FileInfo, err error) error {
 	return func(path string, info fs.FileInfo, err error) error {
 		if !info.IsDir() {
 			pathChan <- &FileDef{
@@ -24,18 +26,22 @@ func walkFunc(pathChan chan *FileDef) func(path string, info fs.FileInfo, err er
 				Size: info.Size(),
 			}
 			wg.Add(1)
+		} else {
+			if _, ok := exclude.e[info.Name()]; ok {
+				return filepath.SkipDir
+			}
 		}
 
 		return nil
 	}
 }
 
-func walkThroughFilesRoutine(rootDir string) chan *FileDef {
+func walkThroughFilesRoutine(rootDir string, exclude *exclusions) chan *FileDef {
 	pathC := make(chan *FileDef, 100)
 
 	wg.Add(1)
 	go func() {
-		filepath.Walk(rootDir, walkFunc(pathC))
+		filepath.Walk(rootDir, walkFunc(pathC, exclude))
 		defer wg.Done()
 	}()
 
@@ -94,20 +100,36 @@ func init() {
 	db = make(map[string][]*FileDef)
 }
 
+// func
 func main() {
 	parralel := flag.Int("p", 10, "sets paralelization level for hashing")
 	sizeThreshold := flag.Int("st", 0, "sets size threshold in kb")
-	help := flag.Bool("h", false, "help command")
+	help := flag.Bool("h", false, "see full help")
+	version := flag.Bool("v", false, "version")
+	var excl exclusions
+	flag.Var(&excl, "e", "List of excluded folders")
 	flag.Parse()
 	rootPath := flag.Arg(0)
 
+	if *version {
+		fmt.Printf("dupefinder version %s\n", VERSION)
+		os.Exit(0)
+	}
+
 	if *help {
+		fmt.Print("\ndupefinder - cli tool that finds duplicate files on you file system\n\n")
+		fmt.Print("Usage:\n")
+		fmt.Print("  dupefinder [params] <root path>\n")
+		fmt.Print("Example:\n")
+		fmt.Print("  dupefinder -e node_modules ./project\n")
+		fmt.Print("\n\n")
+		fmt.Print("Params:\n")
 		flag.PrintDefaults()
 		os.Exit(0)
 	}
 
 	log.Printf("Wroking on file path %s", rootPath)
-	pathC := walkThroughFilesRoutine(rootPath)
+	pathC := walkThroughFilesRoutine(rootPath, &excl)
 	storeC := storeToDbRoutine()
 
 	for i := 0; i < *parralel; i++ {
